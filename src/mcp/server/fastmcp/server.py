@@ -9,6 +9,7 @@ from contextlib import (
     AbstractAsyncContextManager,
     asynccontextmanager,
 )
+from functools import partial
 from itertools import chain
 from typing import Any, Generic, Literal
 
@@ -596,14 +597,22 @@ class FastMCP:
         # Create routes
         routes: list[Route | Mount] = []
         middleware: list[Middleware] = []
-        required_scopes = []
+        
+        # auth_middleware is a do-nothing placeholder in case auth provider is
+        # not configured.
+        def auth_middleware[T](app: Callable[..., T]) -> Callable[..., T]:
+            return app
 
         # Add auth endpoints if auth provider is configured
         if self._auth_server_provider:
             assert self.settings.auth
             from mcp.server.auth.routes import create_auth_routes
 
-            required_scopes = self.settings.auth.required_scopes or []
+            # Use RequireAuthMiddleware as auth_middleware.
+            auth_middleware = partial(
+                RequireAuthMiddleware,
+                required_scopes=self.settings.auth.required_scopes or [],
+            )
 
             middleware = [
                 # extract auth info from request (but do not require it)
@@ -630,14 +639,14 @@ class FastMCP:
         routes.append(
             Route(
                 self.settings.sse_path,
-                endpoint=RequireAuthMiddleware(handle_sse, required_scopes),
+                endpoint=auth_middleware(handle_sse),
                 methods=["GET"],
             )
         )
         routes.append(
             Mount(
                 self.settings.message_path,
-                app=RequireAuthMiddleware(sse.handle_post_message, required_scopes),
+                app=auth_middleware(sse.handle_post_message),
             )
         )
         # mount these routes last, so they have the lowest route matching precedence
